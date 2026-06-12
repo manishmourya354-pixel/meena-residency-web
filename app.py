@@ -1543,94 +1543,89 @@ def meter_page():
                 ui.separator()
                 ui.separator()
 
-                # --- CAMERA & STATE LOGIC ---
-                if 'photo_url' not in app.storage.user:
-                    app.storage.user['photo_url'] = None
-                if 'is_preview' not in app.storage.user:
-                    app.storage.user['is_preview'] = False
+                # --- 1. CHECK IF BILL ALREADY EXISTS ---
+                existing_bill = supabase.table('utility_billing_ledger') \
+                    .select('*') \
+                    .eq('renter_id', renter_id) \
+                    .eq('bill_type', bill_type) \
+                    .eq('bill_month', month_name) \
+                    .eq('bill_year', year_no) \
+                    .execute()
 
-                reading_input = ui.input('Enter Current Reading').props('outlined dense type="number"').classes('w-full mt-2')
-
-                # Camera start script (Mobile friendly)
-                ui.add_head_html('''
-                    <script>
-                        async function startCamera() {
-                            const video = document.getElementById("video");
-                            if (!video) return;
-                            try {
-                                const stream = await navigator.mediaDevices.getUserMedia({
-                                    video: { facingMode: "environment" }
-                                });
-                                video.srcObject = stream;
-                                video.play();
-                            } catch (err) {
-                                console.error("Camera error:", err);
-                                alert("Camera access required. Please check permissions.");
-                            }
-                        }
-                    </script>
-                ''')
-                ui.run_javascript('startCamera();')
-
-                async def capture_photo():
-                    image_data = await ui.run_javascript('''
-                        const video = document.getElementById("video");
-                        const canvas = document.getElementById("canvas");
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        canvas.getContext("2d").drawImage(video, 0, 0);
-                        return canvas.toDataURL("image/jpeg");
-                    ''')
-                    app.storage.user['photo_url'] = image_data
-                    app.storage.user['is_preview'] = True
-                    ui.update()
-
-                def submit_meter():
-                    photo = app.storage.user.get('photo_url')
-                    if not photo:
-                        ui.notify('Capture photo first!', type='warning')
-                        return
-                    if not reading_input.value:
-                        ui.notify('Enter reading!', type='warning')
-                        return
-                    
-                    curr_reading = float(reading_input.value)
-                    if curr_reading < float(prev_reading):
-                        ui.notify('Reading too low!', type='negative')
-                        return
-
-                    payload = {
-                        'renter_id': renter_id, 'room_no': room_no, 'head_id': head_id,
-                        'bill_type': bill_type, 'bill_month': month_name, 'bill_year': year_no,
-                        'prev_reading': float(prev_reading), 'curr_reading': curr_reading,
-                        'curr_reading_date': datetime.now().strftime('%Y-%m-%d'),
-                        'bill_img_url': photo, 'status': 'Submitted'
-                    }
-                    try:
-                        supabase.table('utility_billing_ledger').insert(payload).execute()
-                        ui.notify('Submitted Successfully!', type='positive')
+                if existing_bill.data:
+                    # Agar bill exist karta hai, toh summary dikhayein
+                    bill_data = existing_bill.data[0]
+                    with ui.card().classes('w-full mt-4 p-4 bg-green-50 border border-green-200'):
+                        ui.label('✅ Already Submitted').classes('text-green-800 font-bold text-center w-full text-lg')
+                        ui.label(f"Reading: {bill_data.get('curr_reading')} KWh").classes('text-center w-full')
+                        
+                        if bill_data.get('bill_img_url'):
+                            ui.image(bill_data['bill_img_url']).classes('w-full mt-2 rounded-lg border')
+                else:
+                    # --- 2. AGAR BILL NAHI HAI, TOH CAMERA AUR INPUT DIKHAYEIN ---
+                    if 'photo_url' not in app.storage.user:
                         app.storage.user['photo_url'] = None
+                    if 'is_preview' not in app.storage.user:
                         app.storage.user['is_preview'] = False
-                        reading_input.value = ''
-                        ui.update()
-                    except Exception as e:
-                        ui.notify(f'Error: {str(e)}', type='negative')
 
-                # UI Layout with Black Screen Fix
-                with ui.column().classes('w-full mt-4'):
-                    with ui.element('div').bind_visibility_from(app.storage.user, 'is_preview', backward=lambda x: not x).classes('w-full'):
-                        ui.html('''
-                            <video id="video" autoplay playsinline muted 
-                                style="width:100%; height:300px; object-fit:cover; background-color:black; border-radius:12px;">
-                            </video>
+                    reading_input = ui.input('Enter Current Reading').props('outlined dense type="number"').classes('w-full mt-2')
+
+                    # Camera script (wahi purani)
+                    ui.add_head_html('''
+                        <script>
+                            async function startCamera() {
+                                const video = document.getElementById("video");
+                                if (!video) return;
+                                try {
+                                    const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "environment"}});
+                                    video.srcObject = stream;
+                                    video.play();
+                                } catch (err) { console.error("Camera error:", err); }
+                            }
+                        </script>
+                    ''')
+                    ui.run_javascript('startCamera();')
+
+                    async def capture_photo():
+                        image_data = await ui.run_javascript('''
+                            const video = document.getElementById("video");
+                            const canvas = document.getElementById("canvas");
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            canvas.getContext("2d").drawImage(video, 0, 0);
+                            return canvas.toDataURL("image/jpeg");
                         ''')
-                        ui.html('<canvas id="canvas" style="display:none"></canvas>')
-                        ui.button('📷 Capture Photo', on_click=capture_photo).classes('w-full mt-2 bg-blue-600 text-white')
-                    
-                    with ui.element('div').bind_visibility_from(app.storage.user, 'is_preview').classes('w-full'):
-                        ui.image().bind_source_from(app.storage.user, 'photo_url').classes('w-full rounded-lg border')
-                        ui.button('🔄 Recapture', on_click=lambda: (app.storage.user.update({'is_preview': False}), ui.update())).classes('w-full mt-2 bg-orange-600 text-white')
+                        app.storage.user['photo_url'] = image_data
+                        app.storage.user['is_preview'] = True
+                        ui.update()
 
-                ui.button('SUBMIT', on_click=submit_meter).classes('w-full mt-4 bg-green-700 text-white h-12 text-lg')
+                    def submit_meter():
+                        photo = app.storage.user.get('photo_url')
+                        if not photo or not reading_input.value:
+                            ui.notify('Fill details!', type='warning')
+                            return
+                        
+                        payload = {
+                            'renter_id': renter_id, 'room_no': room_no, 'head_id': head_id,
+                            'bill_type': bill_type, 'bill_month': month_name, 'bill_year': year_no,
+                            'prev_reading': float(prev_reading), 'curr_reading': float(reading_input.value),
+                            'curr_reading_date': datetime.now().strftime('%Y-%m-%d'),
+                            'bill_img_url': photo, 'status': 'Submitted'
+                        }
+                        supabase.table('utility_billing_ledger').insert(payload).execute()
+                        ui.notify('Submitted!', type='positive')
+                        ui.navigate.reload() # Page reload taaki summary dikhe
+
+                    with ui.column().classes('w-full mt-4'):
+                        with ui.element('div').bind_visibility_from(app.storage.user, 'is_preview', backward=lambda x: not x):
+                            ui.html('<video id="video" autoplay playsinline muted style="width:100%; height:300px; object-fit:cover; background:black; border-radius:12px;"></video>')
+                            ui.html('<canvas id="canvas" style="display:none"></canvas>')
+                            ui.button('📷 Capture', on_click=capture_photo).classes('w-full mt-2 bg-blue-600 text-white')
+                        
+                        with ui.element('div').bind_visibility_from(app.storage.user, 'is_preview'):
+                            ui.image().bind_source_from(app.storage.user, 'photo_url').classes('w-full rounded-lg border')
+                            ui.button('🔄 Recapture', on_click=lambda: (app.storage.user.update({'is_preview': False}), ui.update())).classes('w-full mt-2 bg-orange-600 text-white')
+
+                    ui.button('SUBMIT', on_click=submit_meter).classes('w-full mt-4 bg-green-700 text-white h-12 text-lg')
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(title='Meena Residency Portal', port=8080, host='0.0.0.0', storage_secret='meena_secret_999')
