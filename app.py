@@ -1531,16 +1531,6 @@ def meter_page():
                             'text-lg font-bold text-orange-700'
                         )
 
-                    with ui.column().classes('justify-end'):
-                        ui.label('Status').classes(
-                            'text-gray-500 text-xs font-bold'
-                        )
-                        ui.label('Ready For Entry').classes(
-                            'text-green-700 font-bold'
-                        )
-
-                ui.separator()
-                ui.separator()
                 ui.separator()
 
                 # --- 1. CHECK IF BILL ALREADY EXISTS ---
@@ -1557,11 +1547,14 @@ def meter_page():
                     bill_data = existing_bill.data[0]
                     with ui.card().classes('w-full mt-4 p-4 bg-green-50 border border-green-200'):
                         ui.label('✅ Already Submitted').classes('text-green-800 font-bold text-center w-full text-lg')
-                        ui.label(f"Reading: {bill_data.get('curr_reading')} KWh").classes('text-center w-full')
-                        
+                        with ui.row().classes('w-full justify-between mt-2'):
+                            ui.label(f"Prev: {bill_data.get('prev_reading')} KWh").classes('text-gray-700 font-bold')
+                            ui.label(f"Curr: {bill_data.get('curr_reading')} KWh").classes('text-green-700 font-bold')
+                       
                         if bill_data.get('bill_img_url'):
                             ui.image(bill_data['bill_img_url']).classes('w-full mt-2 rounded-lg border')
                 else:
+                    ui.label(f'New Entry - Previous Reading: {prev_reading} KWh').classes('text-orange-700 font-bold')
                     # --- 2. AGAR BILL NAHI HAI, TOH CAMERA AUR INPUT DIKHAYEIN ---
                     if 'photo_url' not in app.storage.user:
                         app.storage.user['photo_url'] = None
