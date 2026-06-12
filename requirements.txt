@@ -1,0 +1,4 @@
+nicegui
+supabase
+python-dotenv
+asyncio
