@@ -1449,15 +1449,7 @@ def meter_page():
             if head.data:
                 head_name = head.data[0]['name']
 
-            last_bill = supabase.table(
-                    'utility_billing_ledger'
-                ).select('*') \
-                .eq('room_no', room_no) \
-                .eq('bill_type', bill_type) \
-                .order('bill_year', desc=True) \
-                .order('created_at', desc=True) \
-                .limit(1) \
-                .execute()
+            
             today = datetime.now()
 
             if today.day <= 5:
@@ -1475,10 +1467,6 @@ def meter_page():
                 month_name = today.strftime('%B')
             year_no = datetime.now().year
 
-            prev_reading = 0
-
-            if last_bill.data:
-                  prev_reading = ( last_bill.data[0].get( 'curr_reading',0) or 0)
             ui.label(  f'{bill_type} Meter Reading').classes(   'text-2xl font-bold text-green-800')
             ui.separator()
             with ui.card().classes(
@@ -1523,13 +1511,7 @@ def meter_page():
                             'text-lg font-semibold text-blue-700'
                         )
 
-                    with ui.column().classes('gap-0'):
-                        ui.label('Previous Reading').classes(
-                            'text-gray-500 text-xs font-bold'
-                        )
-                        ui.label(f'{prev_reading} KWh').classes(
-                            'text-lg font-bold text-orange-700'
-                        )
+
 
                 ui.separator()
 
@@ -1542,9 +1524,31 @@ def meter_page():
                     .eq('bill_year', year_no) \
                     .execute()
 
+                prev_reading = 0
+
                 if existing_bill.data:
-                    # Agar bill exist karta hai, toh summary dikhayein
+
                     bill_data = existing_bill.data[0]
+                    prev_reading = bill_data.get('prev_reading', 0)
+                    ui.label( f"Previous Reading : {prev_reading} KWh").classes( 'text-orange-700 font-bold')
+                else:
+
+                    last_bill = supabase.table(
+                        'utility_billing_ledger'
+                    ).select('*') \
+                    .eq('room_no', room_no) \
+                    .eq('bill_type', bill_type) \
+                    .order('bill_year', desc=True) \
+                    .order('created_at', desc=True) \
+                    .limit(1) \
+                    .execute()
+
+                    if last_bill.data:prev_reading = (last_bill.data[0].get('curr_reading',0) or 0)
+                    ui.label(f"Previous Reading : {prev_reading} KWh").classes('text-orange-700 font-bold')  
+                if existing_bill.data:
+                    bill_data = existing_bill.data[0]
+                    prev_reading = bill_data.get('prev_reading', 0)
+                    curr_reading = bill_data.get('curr_reading', 0)
                     with ui.card().classes('w-full mt-4 p-4 bg-green-50 border border-green-200'):
                         ui.label('✅ Already Submitted').classes('text-green-800 font-bold text-center w-full text-lg')
                         with ui.row().classes('w-full justify-between mt-2'):
@@ -1554,7 +1558,6 @@ def meter_page():
                         if bill_data.get('bill_img_url'):
                             ui.image(bill_data['bill_img_url']).classes('w-full mt-2 rounded-lg border')
                 else:
-                    ui.label(f'New Entry - Previous Reading: {prev_reading} KWh').classes('text-orange-700 font-bold')
                     # --- 2. AGAR BILL NAHI HAI, TOH CAMERA AUR INPUT DIKHAYEIN ---
                     if 'photo_url' not in app.storage.user:
                         app.storage.user['photo_url'] = None
@@ -1594,14 +1597,31 @@ def meter_page():
 
                     def submit_meter():
                         photo = app.storage.user.get('photo_url')
+                        curr_input = reading_input.value
                         if not photo or not reading_input.value:
                             ui.notify('Fill details!', type='warning')
                             return
-                        
+
+                        try:
+                            curr_val = float(curr_input)
+                            prev_val = float(prev_reading)
+
+                            if curr_val < prev_val:
+                                ui.notify(
+                                    f'Current Reading ({curr_val}) cannot be less than Previous Reading ({prev_val})',
+                                    type='negative'
+                                )
+                                return
+
+                        except:
+                            ui.notify('Invalid Reading', type='negative')
+                            return
+
+
                         payload = {
                             'renter_id': renter_id, 'room_no': room_no, 'head_id': head_id,
                             'bill_type': bill_type, 'bill_month': month_name, 'bill_year': year_no,
-                            'prev_reading': float(prev_reading), 'curr_reading': float(reading_input.value),
+                            'prev_reading': prev_val, 'curr_reading': curr_val,
                             'curr_reading_date': datetime.now().strftime('%Y-%m-%d'),
                             'bill_img_url': photo, 'status': 'Submitted'
                         }
