@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
 # --- SUPABASE CONFIGURATION ---
 from supabase import create_client, Client
 
@@ -68,11 +69,20 @@ def main_page():
         pass
     # Persistent check
     if app.storage.user.get('is_logged_in'):
-        state.is_logged_in = True
-        state.user_email = app.storage.user.get('user_email')
+        saved_email = app.storage.user.get('user_email')
+        renter = supabase.table(  'renters' ).select( 'status' ).eq(  'email',  saved_email ).limit(1).execute()
+        if renter.data:
+            status = str(  renter.data[0].get('status', '') ).upper()
+            if status in ['ACTIVE', 'LIVING']:
+                state.is_logged_in = True
+                state.user_email = saved_email
+            else:
+                app.storage.user.clear()
+        else:
+            app.storage.user.clear()
 
     ui.query('body').style('background-color: #f1f8e9; margin: 0; padding: 0;')
-    
+
     ui.add_head_html('''
     <style>
         /* Mobile par drawer 100% width na le, balki sirf 200px rahe */
@@ -105,7 +115,7 @@ def main_page():
     # --- PATIENT PORTAL CORE LOGIN FUNCTIONS (INTEGRATED) ---
     def handle_send_otp(email_val):
         if not email_val:
-            ui.notify('Sahi email daalein', type='warning')
+            ui.notify('Email Not Found', type='warning')
             return
             
         email_clean = str(email_val).strip() # Trailing space hatane ke liye
@@ -114,12 +124,12 @@ def main_page():
             ui.notify(f'Please wait {state.otp_timer}s', type='warning')
             return
         if "@" not in email_clean:
-            ui.notify('Sahi email daalein', type='warning')
+            ui.notify('Email Not Found', type='warning')
             return
             
         try:
             # FIX: Sabhi records check karne ke liye lowercase matching engine switch kiya hai
-            renter_res = supabase.table('renters').select('id,email').execute()
+            renter_res = supabase.table('renters').select('id,email,status').execute()
             
             matched_renter = None
             if renter_res.data:
@@ -129,9 +139,13 @@ def main_page():
                         break
                         
             if not matched_renter:
-                ui.notify('Email Not Found in Renters Registry', type='negative')
+                ui.notify('Email Not Found ', type='negative')
                 return
-                
+            status = str(  matched_renter.get('status', '')).upper()
+            if status not in ['ACTIVE', 'LIVING']:
+                ui.notify(   'Contact Admin',  type='negative' )
+                return
+     
             # Database me jaisa email save hai exact wahi exact format string authentication me pass karein
             final_email = matched_renter['email']
             supabase.auth.sign_in_with_otp({"email": final_email})
@@ -148,21 +162,28 @@ def main_page():
         if not state.qr_token:
             return
         try:
-            renter = supabase.table( 'renters').select( 'email,status').eq( 'qr_token', state.qr_token).limit(1).execute()
-            if not renter.data:
+            # Step 1 : QR token se room nikalo
+            room_lookup = supabase.table( 'renters' ).select( 'room_no' ).eq( 'qr_token',  state.qr_token ).limit(1).execute()
+            if not room_lookup.data:
                 ui.notify('Invalid QR')
                 return
-            status = str(renter.data[0].get(        'status','')).upper()
-            if status not in ['ACTIVE', 'LIVING']:
+            room_no = room_lookup.data[0]['room_no']
+            # Step 2 : Us room ka ACTIVE/LIVING renter nikalo
+            renters = supabase.table(  'renters' ).select(  'email,status').eq( 'room_no',  room_no ).execute()
+            active_renter = None
+            for r in renters.data:
+                status = str(  r.get('status', '') ).upper()
+                if status in ['ACTIVE', 'LIVING']:
+                    active_renter = r
+                    break
+            if not active_renter:
                 ui.notify('Room Not Active')
-                return            
-            if not renter.data:
-                ui.notify( 'Invalid QR',type='negative'  )
                 return
-            email = renter.data[0]['email']
+            email = active_renter['email']
             handle_send_otp(email)
         except Exception as ex:
             print(ex)
+        
     def handle_verify_otp(otp_val):
         try:
             res = supabase.auth.verify_otp({"email": state.email, "token": otp_val.strip(), "type": "email"})
@@ -239,26 +260,39 @@ def main_page():
     with ui.header().classes(' row items-center shadow-sm no-wrap').style('background-color: #2e7d32; height: 48px;'):
         # Menu button jo drawer toggle karega
         ui.button(on_click=lambda: drawer.toggle(), icon='menu').props('flat color=white dense')
-        ui.label('Meena Residency Management Portal').classes('text-white text-mg font-bold ml-2 no-wrap')
+        ui.label(' Meena Residency ').classes('text-white text-mg font-bold ml-2 no-wrap')
     @ui.refreshable
     def render_notices():
         try:
-            res = supabase.table('hub_users').select('notice').execute()
-            # Sirf wahi notices lein jahan notice null na ho
-            notices = [row.get('notice') for row in res.data if row.get('notice')]
-            
-            if not notices:
-                ui.label('No active notice').classes('text-xs text-gray-600')
-            else:
-                with ui.column().classes('w-full gap-1'):
-                    for idx, notice in enumerate(notices, 1):
-                        with ui.row().classes('w-full items-start'):
-                            ui.label(f"{idx}.").classes('font-bold text-xs text-green-800')
-                            # Yahan .classes('blink-text') add kiya hai
-                            ui.label(notice).classes('text-xs blink-text')
+            res = (
+                supabase.table('hub_users')
+                .select('notice')
+                .eq('id', 1)
+                .single()
+                .execute() )
+            notice_text = (
+                res.data.get('notice', '')
+                if res.data else '' )
+            if not notice_text:
+                ui.label( 'No active notice' ).classes(  'text-xs text-gray-600' )
+                return
+            items = [
+                x.strip()
+                for x in str(notice_text).split(',')
+                if x.strip()]
+            with ui.column().classes('w-full gap-1'):
+                for idx, item in enumerate(items, 1):
+                    # Agar DB me 1-,2-,3- likha hai to hata do
+                    if '-' in item:
+                        left, right = item.split('-', 1)
+                        if left.strip().isdigit():
+                            item = right.strip()
+                    with ui.grid(columns='auto 1fr').classes('w-full gap-x-2'):
+                        ui.label(  f'{idx}.').classes( 'font-bold text-xs text-green-800')
+                        ui.label(  item).classes( 'text-xs text-blue-700 font-bold').style( 'word-break:break-word;')
         except Exception as e:
-            ui.label('Error loading').classes('text-xs text-red-500')
-        
+            print(f'Notice Error: {e}')
+            ui.label(  'Error loading notice'  ).classes('text-xs text-red-500' )        
     
     
     
@@ -350,8 +384,8 @@ def main_page():
                     ui.label(f"Head : {head_name}").classes('text-xs text-gray-700 font-medium')
                     ui.label(f"Total Members : {total_members}").classes('text-xs text-gray-700 font-medium')
 
-                with ui.card().classes('mx-2 mt-2 p-3 shadow-sm border w-[90%] h-40 overflow-auto'):
-                    ui.label('NOTICE BOARD').classes('font-bold text-orange-700 text-ms')
+                with ui.card().classes('mx-2 mt-2 p-3 shadow-sm border w-[98%] h-60 overflow-auto'):
+                    ui.label('NOTICE BOARD').classes('font-bold text-orange-700 text-ms blink-text')
                     ui.separator()
                     render_notices()
         sidebar_content()
@@ -359,15 +393,17 @@ def main_page():
         @ui.refreshable
         def main_content():
             if not state.is_logged_in:
-                with ui.card().classes('w-3/4 h-96 items-center justify-center shadow-md bg-white'):
-                    ui.image('https://img.freepik.com/free-vector/doctor-character-background_1270-84.jpg').style('width: 260px; filter: hue-rotate(90deg);')
-                    ui.label('Welcome to Meena Residency Portal').classes('text-green-800 text-xl font-bold mt-4')
+                ui.image('static/doctor.png') \
+                        .classes('w-full') \
+                        .style('height:auto;')
                 return
                 
             # REAL-TIME FALLBACK LOGIC FOR RENTER HEAD UUID MATCHING
+            electric_enabled = True
+            gas_enabled = True
             try:
                 if state.user_email:
-                    renter = supabase.table('renters').select('id,room_no,head_member_id,email').execute()
+                    renter = supabase.table('renters').select('id,room_no,head_member_id,email,setting_tab').execute()
                     valid_row = None
                     if renter.data:
                         for r in renter.data:
@@ -375,7 +411,11 @@ def main_page():
                                 valid_row = r
                                 break
                     
+
                     if valid_row:
+                        settings = valid_row.get('setting_tab') or {}
+                        electric_enabled = settings.get( 'electric_history_enabled',    True )
+                        gas_enabled = settings.get(  'gas_history_enabled', True)
                         state.renter_id = valid_row['id']
                         state.room_no = valid_row['room_no']
                         state.active_renter_head_id = valid_row['head_member_id']
@@ -812,206 +852,76 @@ def main_page():
 
                             # --- CURRENT MONTH CARD BOX ---
                             with ui.card().classes('w-full p-4 border rounded-lg bg-gray-50 shadow-inner mt-1'):
-                                ui.label(
-                                    f"Log Details for {state.selected_month} 2026"
-                                ).classes(
-                                    'text-sm font-bold text-emerald-800 mb-3 border-b pb-1 w-full'
-                                )
-
+                                ui.label( f"Log Details for {state.selected_month} 2026"  ).classes( 'text-sm font-bold text-emerald-800 mb-3 border-b pb-1 w-full' )
                                 # =========================
                                 # DB ROW FOUND
                                 # =========================
                                 if current_bill_row:
-
                                     prev_reading = current_bill_row.get('prev_reading')
                                     curr_reading = current_bill_row.get('curr_reading')
-
                                     prev_date_raw = current_bill_row.get('prev_reading_date')
                                     curr_date_raw = current_bill_row.get('curr_reading_date')
-
-                                    prev_date = (
-                                        datetime.strptime(
-                                            prev_date_raw,
-                                            "%Y-%m-%d"
-                                        ).strftime("%d-%b-%Y")
-                                        if prev_date_raw else "Not Available"
-                                    )
-
-                                    curr_date = (
-                                        datetime.strptime(
-                                            curr_date_raw,
-                                            "%Y-%m-%d"
-                                        ).strftime("%d-%b-%Y")
-                                        if curr_date_raw else "Not Available"
-                                    )
-
-                                    consumed_units = current_bill_row.get(
-                                        'total_consumed_units',
-                                        'Not Available'
-                                    )
-
-                                    extra_units = current_bill_row.get(
-                                        'extra_units',
-                                        0
-                                    )
-
-                                    rate = current_bill_row.get('rate_per_unit')
-                                        
-                                    
-                                
-
-                                    total_amount = current_bill_row.get(
-                                        'total_amount',
-                                        'Not Available'
-                                    )
-
+                                    prev_date = ( datetime.strptime(  prev_date_raw, "%Y-%m-%d"   ).strftime("%d-%b-%Y")  if prev_date_raw else "Not Available" )
+                                    curr_date = ( datetime.strptime(  curr_date_raw,  "%Y-%m-%d" ).strftime("%d-%b-%Y") if curr_date_raw else "Not Available")
+                                    consumed_units = current_bill_row.get(  'total_consumed_units','Not Available'  )
+                                    extra_units = current_bill_row.get( 'extra_units', 0 )
+                                    rate = current_bill_row.get('rate_per_unit')                                                                                                  
+                                    total_amount = current_bill_row.get(  'total_amount',  'Not Available' )
+                                    # Meter Photo Preview
+                                    bill_img = current_bill_row.get('bill_img_url')
+                                    if bill_img:
+                                            ui.image(  bill_img  ).classes( 'w-full rounded-lg border' ).style( 'max-height:320px; ')
+                                   
                                     with ui.grid(columns=2).classes(
-                                        'w-full gap-y-4 text-[14px] text-gray-700'
-                                    ):
-
+                                        'w-full gap-y-4 text-[14px] text-gray-700'):
                                         with ui.column().classes('gap-0'):
-                                            ui.label('Previous Reading:').classes(
-                                                'font-bold text-gray-900'
-                                            )
-                                            ui.label(prev_date).classes(
-                                                'text-blue-600 font-bold text-[11px]'
-                                            )
-                                            ui.label(
-                                                f"{prev_reading} KWh"
-                                            ).classes(
-                                                'text-gray-500 font-medium'
-                                            )
-
+                                            ui.label('Previous Reading:').classes(  'font-bold text-gray-900')
+                                            ui.label(prev_date).classes('text-blue-600 font-bold text-[11px]')
+                                            ui.label( f"{prev_reading} KWh" ).classes( 'text-gray-500 font-medium' )
                                         with ui.column().classes('gap-0'):
-                                            ui.label('Current Reading:').classes(
-                                                'font-bold text-gray-900'
-                                            )
-                                            ui.label(curr_date).classes(
-                                                'text-blue-600 font-bold text-[11px]'
-                                            )
-                                            ui.label(
-                                                f"{curr_reading} KWh"
-                                            ).classes(
-                                                'text-emerald-700 font-bold'
-                                            )
-
+                                            ui.label('Current Reading:').classes( 'font-bold text-gray-900')
+                                            ui.label(curr_date).classes( 'text-blue-600 font-bold text-[11px]')
+                                            ui.label( f"{curr_reading} KWh"  ).classes( 'text-emerald-700 font-bold' )
                                         with ui.row().classes('items-center gap-1'):
-                                            ui.label(
-                                                'Consumed Unit:'
-                                            ).classes(
-                                                'font-bold text-gray-900'
-                                            )
-                                            ui.label(
-                                                f"{consumed_units} Units"
-                                            ).classes(
-                                                'text-emerald-700 font-bold'
-                                            )
-
+                                            ui.label(  'Consumed Unit:' ).classes( 'font-bold text-gray-900')
+                                            ui.label( f"{consumed_units} Units").classes('text-emerald-700 font-bold' )
                                         with ui.row().classes('items-center gap-1'):
-                                            ui.label(
-                                                'Extra Unit:'
-                                            ).classes(
-                                                'font-bold text-gray-900'
-                                            )
-                                            ui.label(
-                                                str(extra_units)
-                                            ).classes(
-                                                'text-gray-500 font-medium'
-                                            )
-
+                                            ui.label(  'Extra Unit:').classes( 'font-bold text-gray-900')
+                                            ui.label( str(extra_units) ).classes(  'text-gray-500 font-medium'  )
                                         with ui.row().classes('items-center gap-1'):
-                                            ui.label(
-                                                'Rate:'
-                                            ).classes(
-                                                'font-bold text-gray-900'
-                                            )
-                                            ui.label( f"₹ {float(rate):.2f}" if rate is not None  else "")
-                                            
-                                               
-                                            
-
+                                            ui.label(  'Rate:'  ).classes( 'font-bold text-gray-900' )
+                                            ui.label( f"₹ {float(rate):.2f}" if rate is not None  else "")                                                                                                                                 
                                         with ui.row().classes('items-center gap-1'):
-                                            ui.label(
-                                                'Total Amount:'
-                                            ).classes(
-                                                'font-bold text-gray-900'
-                                            )
-
-                                            ui.label(
-                                                f"₹ {float(total_amount):.2f}"
-                                                if total_amount is not None 
-                                                else " "
-                                            ).classes(
-                                                'text-orange-700 font-black text-base'
-                                            )
-
+                                            ui.label('Total Amount:' ).classes(  'font-bold text-gray-900'   )
+                                            ui.label( f"₹ {float(total_amount):.2f}"   if total_amount is not None   else " " ).classes( 'text-orange-700 font-black text-base' )
                                     ui.separator().classes('my-2')
-
-                                    with ui.row().classes(
-                                        'w-full justify-center bg-yellow-50 border border-yellow-200 rounded p-2'
-                                    ):
-                                        ui.label(
-                                            current_bill_row.get(
-                                                'status',
-                                                'Submitted'
-                                            ).upper()
-                                        ).classes(
-                                            'text-red-700 font-black text-sm uppercase tracking-wider'
-                                        )
+                                    status_text = str( current_bill_row.get('status', 'Submitted')).upper()
+                                    status_color = (  'text-green-700'   if status_text == 'APPROVED'  else 'text-red-700')
+                                    bg_color = (  'bg-green-50 border-green-200'   if status_text == 'APPROVED'   else 'bg-red-50 border-red-200')
+                                    with ui.row().classes(  f'w-full justify-center border rounded p-2 {bg_color}'):
+                                        ui.label(status_text).classes( f'{status_color} font-black text-sm uppercase tracking-wider')
 
                                 # =========================
                                 # NO ROW FOUND
                                 # =========================
                                 else:
 
-                                    with ui.grid(columns=2).classes(
-                                        'w-full gap-y-4 text-[14px] text-gray-700 mb-4'
-                                    ):
-
+                                    with ui.grid(columns=2).classes('w-full gap-y-4 text-[14px] text-gray-700 mb-4' ):
                                         with ui.column().classes('gap-0'):
-                                            ui.label('Previous Reading:').classes(
-                                                'font-bold text-gray-900'
-                                            )
-                                            ui.label(c_prev_date).classes(
-                                                'text-blue-600 font-bold text-[11px]'
-                                            )
-                                            ui.label(
-                                                f"{c_prev_read} KWh"
-                                                if c_prev_read != "Not Available"
-                                                else "Not Available"
-                                            ).classes(
-                                                'text-gray-500 font-medium'
-                                            )
-
+                                            ui.label('Previous Reading:').classes(  'font-bold text-gray-900')
+                                            ui.label(c_prev_date).classes( 'text-blue-600 font-bold text-[11px]')
+                                            ui.label(  f"{c_prev_read} KWh" if c_prev_read != "Not Available"    else "Not Available" ).classes('text-gray-500 font-medium' )
                                         with ui.column().classes('gap-0'):
-                                            ui.label('Current Month:').classes(
-                                                'font-bold text-gray-900'
-                                            )
-                                            ui.label(c_today_date).classes(
-                                                'text-blue-600 font-bold text-[11px]'
-                                            )
-                                            ui.label(
-                                                "0 KWh (Pending Input)"
-                                            ).classes(
-                                                'text-gray-500 font-medium'
-                                            )
-
+                                            ui.label('Current Month:').classes( 'font-bold text-gray-900' )
+                                            ui.label(c_today_date).classes(  'text-blue-600 font-bold text-[11px]' )
+                                            ui.label( "0 KWh (Pending Input)"  ).classes(  'text-gray-500 font-medium' )
                                         with ui.row().classes('items-center gap-1'):
-                                            ui.label('Extra Unit:').classes(
-                                                'font-bold text-gray-900'
-                                            )
-                                            ui.label('0').classes(
-                                                'text-gray-500 font-medium'
-                                            )
-
+                                            ui.label('Extra Unit:').classes( 'font-bold text-gray-900'  )
+                                            ui.label('0').classes(    'text-gray-500 font-medium' )
                                     with ui.row().classes(
-                                        'w-full mt-2 justify-center'
-                                    ):
-                                        kwh_input = ui.input(
-                                            'Enter KWh Reading'
-                                        ).props('outlined dense type="number"' ).classes('w-full max-w-md bg-white shadow-xs')
-                                
-                            
+                                        'w-full mt-2 justify-center'):
+                                        kwh_input = ui.input( 'Enter KWh Reading' ).props('outlined dense type="number"' ).classes('w-full max-w-md bg-white shadow-xs')
+                                                      
                             # --- SUBMIT FUNCTION ---
                             def trigger_submit():
                                 try:
@@ -1082,7 +992,7 @@ def main_page():
                                     ui.notify(f"Submission Failed: {str(e)}", type='negative')
 
                             if not current_bill_row:
-                                ui.button('SUBMIT LOG',on_click=trigger_submit  ).classes('w-full mt-4 bg-green-700 text-white font-bold h-10 text-xs')
+                                ui.button('SUBMIT LOG',on_click=trigger_submit  ).classes('w-full mt-4 bg-green-700 text-white font-bold h-10 text-xs').disable()
                             
                     elif state.billing_tab == "history":
                         approved_history = supabase.table( 'utility_billing_ledger').select('bill_month,bill_year').eq('renter_id', state.renter_id).eq('bill_type', state.bill_type).eq( 'status', 'Approved').execute()
@@ -1135,12 +1045,15 @@ def main_page():
                                         extra_units = history_record.get('extra_units', 0)
                                         rate_per_unit = history_record.get('rate_per_unit')
                                         total_amount = history_record.get('total_amount')
+                                        history_bill_img = history_record.get('bill_img_url')                             
                                 except:
                                     pass
                             
                             with ui.card().classes('w-full p-4 border rounded-lg bg-gray-50 mt-2 shadow-inner'):
                                 ui.label(f"Billing Details for {state.history_month} 2026").classes('text-sm font-bold text-emerald-800 mb-3 border-b pb-1 w-full')
-                                
+                                if history_bill_img:
+                                        ui.image(  history_bill_img ).classes( 'w-full rounded-lg border mb-3' ).style(  'max-height:320px; object-fit:contain;')
+
                                 with ui.grid(columns=2).classes('w-full gap-y-4 text-[14px] text-gray-700'):
                                     with ui.column().classes('gap-0'):
                                         ui.label('Previous Reading:').classes('font-bold text-gray-900')
@@ -1404,11 +1317,23 @@ def main_page():
                 except Exception as ex:
                     print(ex)
                 ui.label( f'Welcome {head_name} Dashboard').classes( 'w-full px-4 text-2xl font-bold text-green-900 mb-4 text-center')
+                tiles = [
+                 ('person', 'Member Detail', True),
+                    ('bolt', 'Electric Bill', electric_enabled),
+                    ('local_fire_department', 'Gas Bill', gas_enabled),
+                    ('receipt_long', 'Rent Ledger', True),
+                    ('payments', 'Pay Now', True),
+                ]
                 with ui.row().classes('w-full justify-center gap-3 px-2'):
-                    for icon, label in [('person', 'Member Detail'), ('bolt', 'Electric Bill'), ('local_fire_department', 'Gas Bill'),('receipt_long', 'Rent Ledger'), ('payments', 'Pay Now')]:
-                        with ui.card().classes('p-3 items-center cursor-pointer hover:bg-green-50 w-36 shadow-sm border').on('click', lambda l=label: open_page(l)):
-                            ui.icon(icon, size='2.2rem').classes('text-green-700')
-                            ui.label(label).classes('font-bold text-center mt-1 text-xs text-gray-700')   
+                    for icon, label, enabled in tiles:
+                        card = ui.card().classes(  'p-3 items-center w-36 shadow-sm border' )
+                        if enabled:
+                            card.classes( 'cursor-pointer hover:bg-green-50' ).on( 'click',  lambda l=label: open_page(l) )
+                        else:
+                            card.classes( 'opacity-30'  )
+                        with card:
+                            ui.icon(   icon,  size='2.2rem' ).classes(  'text-green-700' )
+                            ui.label(   label ).classes( 'font-bold text-center mt-1 text-xs text-gray-700')
         main_content()
 @ui.page('/meter')
 def meter_page():
@@ -1420,21 +1345,22 @@ def meter_page():
                 ui.label('Invalid QR')
                 return
 
-            renter = supabase.table(
-                'renters'
-            ).select('*').eq(
-                'qr_token',
-                token
-            ).limit(1).execute()
-
-            if not renter.data:
+            # Step 1 : Token se room nikalo
+            room_lookup = supabase.table('renters').select( 'room_no').eq(  'qr_token', token).limit(1).execute()
+            if not room_lookup.data:
                 ui.label('Invalid QR')
                 return
+            room_no = room_lookup.data[0]['room_no']
+            # Step 2 : Us room ka ACTIVE renter nikalo
+            active_renter = supabase.table(  'renters').select('*').eq( 'room_no',   room_no).eq(   'status',  'ACTIVE').limit(1).execute()
 
-            renter_row = renter.data[0]
-            room_no = renter_row['room_no']
+            if not active_renter.data:
+                ui.label('No Active Renter Found')
+                return
+            renter_row = active_renter.data[0]
             renter_id = renter_row['id']
             head_id = renter_row['head_member_id']
+         
             head_name = 'Unknown'
 
             head = supabase.table(
