@@ -111,7 +111,15 @@ def main_page():
 ''')
     
     
-
+    def save_login_log(email, status, reason=''):
+        try:
+            supabase.table('login_logs').insert({
+                'email': email,
+                'status': status,
+                'reason': reason
+            }).execute()
+        except Exception as e:
+            print(e)
     # --- PATIENT PORTAL CORE LOGIN FUNCTIONS (INTEGRATED) ---
     def handle_send_otp(email_val):
         if not email_val:
@@ -137,10 +145,12 @@ def main_page():
                     if str(r.get('email', '')).strip().lower() == email_clean.lower():
                         matched_renter = r
                         break
-                        
+
+            save_login_log( email_clean,  'failed', 'email_not_found')      
             if not matched_renter:
                 ui.notify('Email Not Found ', type='negative')
                 return
+            save_login_log( email_clean,'failed',  'inactive_account')
             status = str(  matched_renter.get('status', '')).upper()
             if status not in ['ACTIVE', 'LIVING']:
                 ui.notify(   'Contact Admin',  type='negative' )
@@ -149,6 +159,7 @@ def main_page():
             # Database me jaisa email save hai exact wahi exact format string authentication me pass karein
             final_email = matched_renter['email']
             supabase.auth.sign_in_with_otp({"email": final_email})
+            save_login_log(  final_email,   'otp_sent',  'otp_generated')
             
             state.email = final_email
             state.otp_sent = True
@@ -188,6 +199,7 @@ def main_page():
         try:
             res = supabase.auth.verify_otp({"email": state.email, "token": otp_val.strip(), "type": "email"})
             # Verification re-check
+            save_login_log( state.email,  'failed',  'invalid_otp')
             if not res.user:
                 ui.notify('Invalid OTP', type='negative')
                 return
@@ -209,7 +221,7 @@ def main_page():
                         state.room_no = r['room_no']
                         state.active_renter_head_id = r['head_member_id']
                         break
-
+            save_login_log( state.email, 'success', 'login_success')
             ui.notify('Logged in successfully!', type='positive')
             sidebar_content.refresh()
             main_content.refresh()
