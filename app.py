@@ -1506,35 +1506,40 @@ def meter_page():
 
                     # Camera script (wahi purani)
                     ui.add_head_html('''
-                        <script>
-                            async function startCamera() {
-                                const video = document.getElementById("video");
-                                if (!video) return;
-                                try {
-                                    const stream = await navigator.mediaDevices.getUserMedia({
-                                            video: {
-                                                facingMode: { ideal: "environment" },
-                                                width: { ideal: 1920 },
-                                                height: { ideal: 1080 }
-                                            }
-                                        });
+                    <script>
+                    async function startCamera() {
+                        const video = document.getElementById("video");
+                        if (!video) return;
 
-                                        video.srcObject = stream;
-                                        await video.play();
+                        try {
+                            const stream = await navigator.mediaDevices.getUserMedia({
+                                video: {
+                                    facingMode: { ideal: "environment" }
+                                }
+                            });
 
-                                        try {
-                                            const track = stream.getVideoTracks()[0];
-                                            const caps = track.getCapabilities();
+                            video.srcObject = stream;
+                            await video.play();
 
-                                            if (caps.zoom) {
-                                                track.applyConstraints({
-                                                    advanced: [{ zoom: 3.0 }]
-                                                });
-                                            }
-                                        } catch (e) {
-                                            console.log('Zoom not supported');
-                                        }
-                        </script>
+                            try {
+                                const track = stream.getVideoTracks()[0];
+                                const caps = track.getCapabilities();
+
+                                if (caps.zoom) {
+                                    await track.applyConstraints({
+                                        advanced: [{ zoom: 3.0 }]
+                                    });
+                                }
+                            } catch(e) {
+                                console.log("Zoom not supported");
+                            }
+
+                        } catch(err) {
+                            console.log(err);
+                            alert("Camera permission denied");
+                        }
+                    }
+                    </script>
                     ''')
                     ui.run_javascript('startCamera();')
 
