@@ -1511,11 +1511,29 @@ def meter_page():
                                 const video = document.getElementById("video");
                                 if (!video) return;
                                 try {
-                                    const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "environment"}});
-                                    video.srcObject = stream;
-                                    video.play();
-                                } catch (err) { console.error("Camera error:", err); }
-                            }
+                                    const stream = await navigator.mediaDevices.getUserMedia({
+                                            video: {
+                                                facingMode: { ideal: "environment" },
+                                                width: { ideal: 1920 },
+                                                height: { ideal: 1080 }
+                                            }
+                                        });
+
+                                        video.srcObject = stream;
+                                        await video.play();
+
+                                        try {
+                                            const track = stream.getVideoTracks()[0];
+                                            const caps = track.getCapabilities();
+
+                                            if (caps.zoom) {
+                                                track.applyConstraints({
+                                                    advanced: [{ zoom: 3.0 }]
+                                                });
+                                            }
+                                        } catch (e) {
+                                            console.log('Zoom not supported');
+                                        }
                         </script>
                     ''')
                     ui.run_javascript('startCamera();')
@@ -1569,7 +1587,20 @@ def meter_page():
 
                     with ui.column().classes('w-full mt-4'):
                         with ui.element('div').bind_visibility_from(app.storage.user, 'is_preview', backward=lambda x: not x):
-                            ui.html('<video id="video" autoplay playsinline muted style="width:100%; height:300px; object-fit:cover; background:black; border-radius:12px;"></video>')
+                            ui.html('''
+                                            <video
+                                            id="video"
+                                            autoplay
+                                            playsinline
+                                            muted
+                                            style="
+                                            width:100%;
+                                            height:420px;
+                                            object-fit:cover;
+                                            background:black;
+                                            border-radius:12px;
+                                            ">
+                                            </video> ''')
                             ui.html('<canvas id="canvas" style="display:none"></canvas>')
                             ui.button('📷 Capture', on_click=capture_photo).classes('w-full mt-2 bg-blue-600 text-white')
                         
